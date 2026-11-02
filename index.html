@@ -1,0 +1,119 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="manifest" href="manifest.json"><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"><meta name="theme-color" content="#1b1d2a"><link rel="apple-touch-icon" href="icon.png"><meta name="apple-mobile-web-app-capable" content="yes"><title>Dash Runner</title>
+<style>html,body{margin:0;height:100%;background:#1b1d2a;overflow:hidden}canvas{display:block;margin:auto}#tc{position:fixed;inset:auto 0 0 0;display:none;justify-content:space-between;padding:16px;pointer-events:none;user-select:none;-webkit-user-select:none}#tc div{display:flex;gap:14px}#tc b{pointer-events:auto;width:72px;height:72px;border-radius:50%;background:rgba(255,255,255,.18);color:#fff;font:bold 22px sans-serif;display:flex;align-items:center;justify-content:center;touch-action:none}</style></head>
+<body><canvas id="c"></canvas><div id="tc"><div><b data-k="ArrowLeft">&#9664;</b><b data-k="ArrowRight">&#9654;</b></div><div><b data-k="KeyR" style="width:48px;height:48px;font-size:14px">R</b><b data-k="ShiftLeft">DASH</b><b data-k="Space">JUMP</b></div></div><script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+const W=960,H=540;cv.width=W;cv.height=H;
+function fit(){const s=Math.min(innerWidth/W,innerHeight/H);cv.style.width=W*s+'px';cv.style.height=H*s+'px';cv.style.marginTop=(innerHeight-H*s)/2+'px'}addEventListener('resize',fit);fit();
+const T=30;
+// Level: # solid, ^ spike, C checkpoint, G goal, P start
+const map=[
+"................................................................................................",
+"................................................................................................",
+"................................................................................................",
+"................................................................................................",
+"..................................................................................#.............",
+"..................................................................................#.............",
+"..............................................###.................................#.........G...",
+"..................................................................................#.......#####.",
+".......................................#..........................................#.............",
+"...........................####........#.................................##.......#.............",
+".......................................#.........................#.........................#....",
+"...................#...................#.................C.................................#....",
+"............................................^^^^.......#####..............................#....",
+".P................#######..........................#.......#.......^^^.........#..........#....",
+"##########..........................C.......####...#.......######.#####.........#.....^^..#....",
+"##########^^^^^^^^#######^^^^^^^#########^^^####^^^#^^^^^^^#############^^^^^^^^#######################",
+"##########################################################################################################",
+"##########################################################################################################"];
+const LW=map[0].length*T,LH=map.length*T;
+function tile(x,y){const r=map[Math.floor(y/T)];if(!r)return y<0?'.':'#';const c=r[Math.floor(x/T)];return c===undefined?'#':c}
+function solid(x,y){return tile(x,y)==='#'}
+let start={x:0,y:0},cps=[],goal=null;
+map.forEach((r,j)=>[...r].forEach((c,i)=>{if(c=='P')start={x:i*T+6,y:j*T};if(c=='C')cps.push({x:i*T,y:j*T,on:false});if(c=='G')goal={x:i*T,y:j*T}}));
+const movers=[{x:10*T,y:12*T,w:3*T,ax:10*T,bx:16*T,t:0,sp:1.2,vy:0,vx:0,ay:12*T,by:12*T},
+{x:27*T,y:12*T,w:2*T,ax:27*T,bx:27*T,ay:7*T,by:13*T,t:0,sp:1,vx:0,vy:0},
+{x:72*T,y:11*T,w:3*T,ax:72*T,bx:78*T,ay:11*T,by:11*T,t:0,sp:1.5,vx:0,vy:0}];
+const K={};addEventListener('keydown',e=>{if(!K[e.code])K[e.code+'_p']=1;K[e.code]=1;if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault()});
+addEventListener('keyup',e=>{K[e.code]=0});
+const P={w:20,h:26};let spawn,parts=[],time=0,running=false,won=false,deaths=0,shake=0;
+let best=parseFloat(localStorage.getItem('dr_best'))||null;
+function reset(full){if(full){spawn={...start};cps.forEach(c=>c.on=false);time=0;running=false;won=false;deaths=0}
+Object.assign(P,{x:spawn.x,y:spawn.y,vx:0,vy:0,coyote:0,buf:0,ground:false,wall:0,wallC:0,dash:0,canDash:true,dashT:0,dx:0,dy:0,face:1,dead:0,ride:null})}
+reset(true);
+function burst(x,y,n,col,s){for(let i=0;i<n;i++){const a=Math.random()*6.28,v=Math.random()*s;parts.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,l:20+Math.random()*20,c:col})}}
+function die(){if(P.dead)return;P.dead=40;deaths++;shake=10;burst(P.x+10,P.y+13,40,'#ff5d73',6)}
+function moveX(d){P.x+=d;const s=Math.sign(d);if(!s)return;const ex=s>0?P.x+P.w:P.x;
+for(const yy of[P.y+1,P.y+P.h/2,P.y+P.h-1])if(solid(ex,yy)){P.x=s>0?Math.floor(ex/T)*T-P.w-.01:Math.floor(ex/T+1)*T+.01;P.vx=0;if(P.dashT)P.dashT=0;return}}
+function moveY(d){P.y+=d;const s=Math.sign(d);if(!s)return;const ey=s>0?P.y+P.h:P.y;
+for(const xx of[P.x+1,P.x+P.w/2,P.x+P.w-1])if(solid(xx,ey)){if(s>0){P.y=Math.floor(ey/T)*T-P.h;P.ground=true}else P.y=Math.floor(ey/T+1)*T;P.vy=0;return}
+if(s>0)for(const m of movers)if(P.x+P.w>m.x&&P.x<m.x+m.w&&P.y+P.h>=m.y&&P.y+P.h-d<=m.y+1){P.y=m.y-P.h;P.vy=0;P.ground=true;P.ride=m;return}}
+const ACC=0.9,AIRACC=0.6,MAX=6.2,FR=0.75,GR=0.55,JV=-11.5,DASH=13;
+function update(){
+ for(const m of movers){m.t+=m.sp/60;const k=(Math.sin(m.t)+1)/2,nx=m.ax+(m.bx-m.ax)*k,ny=m.ay+(m.by-m.ay)*k;m.vx=nx-m.x;m.vy=ny-m.y;m.x=nx;m.y=ny}
+ for(const p of parts){p.x+=p.vx;p.y+=p.vy;p.vy+=.2;p.vx*=.95;p.l--}parts=parts.filter(p=>p.l>0);
+ if(K.KeyR_p)reset(true);
+ if(P.dead){if(--P.dead==0)reset(false);return}
+ if(won)return;
+ const L=K.ArrowLeft||K.KeyA,R=K.ArrowRight||K.KeyD,U=K.ArrowUp||K.KeyW,D=K.ArrowDown||K.KeyS;
+ const jp=K.Space_p||K.ArrowUp_p||K.KeyW_p,jh=K.Space||K.ArrowUp||K.KeyW;
+ const ix=(R?1:0)-(L?1:0);
+ if(!running&&(ix||jp))running=true;if(running)time+=1/60;
+ if(ix)P.face=ix;
+ if(P.ride&&P.ground){moveX(P.ride.vx);P.y=P.ride.y-P.h}
+ const wasG=P.ground;P.ground=false;P.ride=null;
+ if(jp)P.buf=7;else if(P.buf>0)P.buf--;
+ if((K.ShiftLeft_p||K.ShiftRight_p||K.KeyK_p)&&P.canDash){let dx=ix,dy=(D?1:0)-(U?1:0);if(!dx&&!dy)dx=P.face;const l=Math.hypot(dx,dy);P.dx=dx/l;P.dy=dy/l;P.dashT=10;P.canDash=false;shake=4;burst(P.x+10,P.y+13,15,'#7df9ff',3)}
+ if(P.dashT>0){P.dashT--;P.vx=P.dx*DASH;P.vy=P.dy*DASH;if(P.dashT==0){P.vx*=.5;P.vy*=.4}if(Math.random()<.8)parts.push({x:P.x+10,y:P.y+13,vx:0,vy:0,l:15,c:'#7df9ff'})}
+ else{
+  const a=wasG?ACC:AIRACC;
+  if(ix){P.vx+=ix*a*(Math.sign(P.vx)!=ix&&P.vx?1.8:1);if(Math.abs(P.vx)>MAX)P.vx=Math.max(-MAX,Math.min(MAX,P.vx*.95+Math.sign(P.vx)*MAX*.05))}
+  else P.vx*=wasG?FR:.93;
+  P.vy+=(P.vy<0&&!jh)?GR*2.2:GR;
+  if(P.wall&&P.vy>2.5&&ix==P.wall)P.vy=2.5;
+  P.vy=Math.min(P.vy,14);
+ }
+ if(wasG)P.coyote=6;else if(P.coyote>0)P.coyote--;
+ if(P.buf&&P.coyote>0){P.vy=JV;P.buf=0;P.coyote=0;P.dashT=0;burst(P.x+10,P.y+P.h,8,'#fff',2)}
+ else if(P.buf&&P.wallC>0){P.vy=JV*.95;P.vx=-P.wall*7.5;P.buf=0;P.wallC=0;P.dashT=0;burst(P.x+(P.wall>0?P.w:0),P.y+13,8,'#fff',2)}
+ moveX(P.vx);moveY(P.vy);
+ if(P.ground&&!P.dashT)P.canDash=true;
+ P.wall=solid(P.x+P.w+2,P.y+P.h/2)?1:solid(P.x-2,P.y+P.h/2)?-1:0;
+ if(P.wall&&!P.ground)P.wallC=6;else if(P.wallC>0)P.wallC--;
+ for(const xx of[P.x+3,P.x+P.w-3])for(const yy of[P.y+4,P.y+P.h-2]){const t=tile(xx,yy);if(t=='^'&&(yy%T)>T*.4)die()}
+ if(P.y>LH)die();
+ for(const c of cps)if(!c.on&&Math.abs(P.x-c.x)<T&&Math.abs(P.y-c.y)<T*1.5){c.on=true;spawn={x:c.x+5,y:c.y};burst(c.x+15,c.y,25,'#ffd166',4)}
+ if(goal&&Math.abs(P.x-goal.x)<T&&Math.abs(P.y-goal.y)<T*1.5){won=true;burst(goal.x+15,goal.y,80,'#06d6a0',7);if(!best||time<best){best=time;localStorage.setItem('dr_best',best)}}
+}
+let cam={x:0,y:0};
+function fmt(t){return t==null?'--':t.toFixed(2)+'s'}
+function draw(){
+ cam.x+=(Math.max(0,Math.min(LW-W,P.x-W/2+P.face*60))-cam.x)*.12;cam.y+=(Math.max(0,Math.min(LH-H,P.y-H/2))-cam.y)*.12;
+ const sx=(Math.random()-.5)*shake,sy=(Math.random()-.5)*shake;shake*=.85;
+ ctx.fillStyle='#1b1d2a';ctx.fillRect(0,0,W,H);
+ ctx.save();ctx.translate(-Math.round(cam.x)+sx,-Math.round(cam.y)+sy);
+ ctx.fillStyle='#242741';for(let i=0;i<40;i++)ctx.fillRect(i*137+cam.x*.5,80+(i*53)%300,60,200);
+ const x0=Math.floor(cam.x/T),x1=x0+W/T+2;
+ for(let j=0;j<map.length;j++)for(let i=x0;i<x1;i++){const c=map[j][i];
+  if(c=='#'){ctx.fillStyle=map[j-1]&&map[j-1][i]!='#'?'#5c6bc0':'#3949ab';ctx.fillRect(i*T,j*T,T,T)}
+  else if(c=='^'){ctx.fillStyle='#ff5d73';ctx.beginPath();for(let k=0;k<3;k++){ctx.moveTo(i*T+k*10,j*T+T);ctx.lineTo(i*T+k*10+5,j*T+12);ctx.lineTo(i*T+k*10+10,j*T+T)}ctx.fill()}}
+ ctx.fillStyle='#ef8354';for(const m of movers)ctx.fillRect(m.x,m.y,m.w,10);
+ for(const c of cps){ctx.fillStyle='#888';ctx.fillRect(c.x+13,c.y-15,4,45);ctx.fillStyle=c.on?'#ffd166':'#666';ctx.fillRect(c.x+17,c.y-15,14,10)}
+ if(goal){ctx.fillStyle='#ddd';ctx.fillRect(goal.x+13,goal.y-30,4,60);ctx.fillStyle='#06d6a0';ctx.beginPath();ctx.moveTo(goal.x+17,goal.y-30);ctx.lineTo(goal.x+45,goal.y-20+Math.sin(Date.now()/150)*3);ctx.lineTo(goal.x+17,goal.y-10);ctx.fill()}
+ for(const p of parts){ctx.globalAlpha=Math.min(1,p.l/20);ctx.fillStyle=p.c;ctx.fillRect(p.x-2,p.y-2,4,4)}ctx.globalAlpha=1;
+ if(!P.dead){const st=P.dashT?1.25:1;ctx.fillStyle=P.dashT?'#7df9ff':P.canDash?'#f8f8f2':'#9aa0c0';
+  ctx.fillRect(P.x+P.w/2-P.w*st/2,P.y+P.h-P.h/st,P.w*st,P.h/st);ctx.fillStyle='#1b1d2a';ctx.fillRect(P.x+(P.face>0?12:4),P.y+7,4,5)}
+ ctx.restore();
+ ctx.fillStyle='#fff';ctx.font='bold 22px monospace';ctx.fillText('TIME '+fmt(time),16,30);
+ ctx.font='16px monospace';ctx.fillText('BEST '+fmt(best)+'   DEATHS '+deaths,16,54);
+ ctx.fillStyle='#aab';ctx.fillText('Arrows/WASD move · Space/Up jump · Shift dash · R restart',W-560,30);
+ if(won){ctx.fillStyle='rgba(0,0,0,.5)';ctx.fillRect(0,0,W,H);ctx.fillStyle='#06d6a0';ctx.font='bold 48px monospace';ctx.textAlign='center';ctx.fillText('FINISH! '+fmt(time),W/2,H/2);ctx.font='20px monospace';ctx.fillStyle='#fff';ctx.fillText((time<=best?'NEW BEST! ':'')+'Press R to run again',W/2,H/2+40);ctx.textAlign='left'}
+}
+let acc=0,last=performance.now();
+function loop(n){acc+=Math.min(100,n-last);last=n;while(acc>=1000/60){update();for(const k in K)if(k.endsWith('_p'))delete K[k];acc-=1000/60}draw();requestAnimationFrame(loop)}
+requestAnimationFrame(loop);
+if('ontouchstart' in window||navigator.maxTouchPoints>0)document.getElementById('tc').style.display='flex';
+document.querySelectorAll('#tc b').forEach(b=>{const k=b.dataset.k;
+b.addEventListener('pointerdown',e=>{e.preventDefault();b.setPointerCapture(e.pointerId);if(!K[k])K[k+'_p']=1;K[k]=1;b.style.background='rgba(255,255,255,.4)'});
+const up=e=>{K[k]=0;b.style.background=''};b.addEventListener('pointerup',up);b.addEventListener('pointercancel',up)});
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js');
+</script></body></html>
